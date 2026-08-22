@@ -4,9 +4,13 @@ import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
+import { GoogleGenAI } from '@google/genai';
 import pool from './config/db.js';
 
 dotenv.config();
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -119,8 +123,133 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// 📚 4. GET ALL LEARNING MODULES
+app.get('/api/modules', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM modules
+      ORDER BY module_id
+    `);
 
-// 🚀 START SERVER LISTENING
-app.listen(PORT, () => {
-  console.log(`HerFunds Backend running cleanly on port ${PORT}`);
+    res.status(200).json({
+      success: true,
+      modules: result.rows,
+    });
+  } catch (error) {
+    console.error('Modules Fetch Error:', error);
+
+    res.status(500).json({
+      success: false,
+      message: 'Could not fetch learning modules.',
+    });
+  }
+});
+// 📖 GET LESSONS FOR A MODULE
+app.get('/api/modules/:moduleId/lessons', async (req, res) => {
+  const { moduleId } = req.params;
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        lesson_id,
+        module_id,
+        title,
+        summary,
+        content,
+        language,
+        duration,
+        difficulty,
+        lesson_order
+      FROM lessons
+      WHERE module_id = $1
+      ORDER BY lesson_order
+      `,
+      [moduleId]
+    );
+
+    res.status(200).json({
+      success: true,
+      lessons: result.rows,
+    });
+  } catch (error) {
+    console.error('Lessons Fetch Error:', error);
+
+    res.status(500).json({
+      success: false,
+      message: 'Could not fetch lessons.',
+    });
+  }
+});
+// 🤖 5. HERFUNDS AI CHAT ENDPOINT
+app.post('/api/ai/chat', async (req, res) => {
+  const { message } = req.body;
+
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'Please provide a valid message.',
+    });
+  }
+
+  try {
+    const systemInstruction = `
+You are HerFunds AI, the financial literacy assistant inside the HerFunds application.
+
+Your purpose is to educate users about:
+- Personal finance
+- Saving and budgeting
+- Banking
+- Digital payments and financial safety
+- Investments and basic financial concepts
+- Loans and EMIs
+- Taxation
+- Government financial schemes
+- Financial planning concepts
+
+Rules:
+1. Explain financial concepts in simple language suitable for beginners.
+2. Be supportive, clear and non-judgmental.
+3. Use Indian financial context when relevant, including ₹, UPI, SIP, CIBIL, RBI, etc.
+4. Do not pretend to be a personal financial advisor.
+5. Do not guarantee investment returns or tell users that a specific investment will definitely make money.
+6. For personalized investment decisions, explain the factors the user should consider and recommend consulting a qualified financial professional when appropriate.
+7. If the question is unrelated to finance or financial literacy, politely explain that you are designed primarily for HerFunds financial education.
+8. Keep normal answers concise and easy to understand.
+9. Use examples when they make a concept easier to understand.
+`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.6-flash',
+
+      contents: `${systemInstruction}
+
+User question:
+${message}`,
+    });
+
+    const reply =
+        response.text ||
+        'I could not generate a response right now. Please try again.';
+
+    return res.status(200).json({
+      success: true,
+      reply,
+    });
+  } catch (error) {
+    console.error('HerFunds AI Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'HerFunds AI could not process your request.',
+    });
+  }
+});
+
+// 🚀 START SERVER LISTENING (TYPESCRIPT COMPLIANT)
+const serverPort = Number(PORT) || 5000;
+
+app.listen(serverPort, '0.0.0.0', () => {
+  console.log(`HerFunds Backend running cleanly on port ${serverPort} across all adapters`);
 });
