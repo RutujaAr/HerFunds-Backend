@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { GoogleGenAI } from '@google/genai';
 import pool from './config/db.js';
+import aiRoutes from './routes/ai.routes';
 
 // Simulation routes
 import simulationRoutes from './routes/simulationRoutes.js';
@@ -19,8 +20,17 @@ const ai = new GoogleGenAI({
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+// 🌐 Middleware Configuration
+app.use(cors({
+  origin: '*', // Allows requests from any origin during development
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
+
+// 🤖 AI Chatbot Routes
+app.use('/api/ai', aiRoutes);
 
 
 // 🔑 INITIALIZE GOOGLE AUTH CLIENT
@@ -120,18 +130,16 @@ app.post('/api/auth/google', async (req, res) => {
 
   try {
 
-    const ticket =
-      await googleClient.verifyIdToken({
-        idToken: token,
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: [
+        "1058256639702-kf6keqod679iifii1jvudn89r9f3e621.apps.googleusercontent.com", // Web Client ID
+        "1058256639702-ui0bbo682f3itque8029bf8qcrdbdnc1.apps.googleusercontent.com", // Android Client ID
+        "1058256639702-u2ns0js02n7srtqp1l6oo5sqhjj66gvq.apps.googleusercontent.com"  
+      ],
+    });
 
-        audience: [
-          "1058256639702-kf6keqod679iifii1jvudn89r9f3e621.apps.googleusercontent.com",
-
-          "1058256639702-ui0bbo682f3itque8029bf8qcrdbdnc1.apps.googleusercontent.com"
-        ],
-      });
-
-    const payload =
+      const payload =
       ticket.getPayload();
 
     if (!payload) {
@@ -259,96 +267,90 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-
-// 📚 4. GET ALL LEARNING MODULES
-
+// 📚 4. GET ALL LEARNING MODULES ENDPOINT
 app.get('/api/modules', async (req, res) => {
-
   try {
-
-    const result =
-      await pool.query(`
-        SELECT *
-        FROM modules
-        ORDER BY module_id
-      `);
+    const result = await pool.query(
+      'SELECT module_id, title, description, module_order FROM public.modules ORDER BY module_order ASC'
+    );
+    
+    const formattedModules = result.rows.map(m => ({
+      id: m.module_id,
+      title: m.title,
+      description: m.description,
+      module_order: m.module_order
+    }));
 
     res.status(200).json({
       success: true,
-      modules: result.rows,
+      modules: formattedModules
     });
-
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Fetch Modules Error Details:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch learning modules.', error: errorMessage });
+  }
+});
 
-    console.error(
-      'Modules Fetch Error:',
-      error
+// 📖 5. GET LESSONS FOR A SPECIFIC MODULE
+app.get('/api/modules/:moduleId/lessons', async (req, res) => {
+  const { moduleId } = req.params;
+  try {
+    const result = await pool.query(
+      'SELECT * FROM public.lessons WHERE module_id = $1 ORDER BY lesson_order ASC',
+      [moduleId]
     );
 
+    const formattedLessons = result.rows.map(l => ({
+      id: l.lesson_id,
+      module_id: l.module_id,
+      title: l.title,
+      summary: l.summary,
+      content: l.content,
+      duration: l.duration,
+      difficulty: l.difficulty,
+      lesson_order: l.lesson_order
+    }));
+
+    res.status(200).json({
+      success: true,
+      lessons: formattedLessons
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Fetch Lessons Error Details:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch lessons.', error: errorMessage });
+  }
+});
+
+// 🎯 6. SUBMIT MODULE QUIZ SCORE ENDPOINT
+app.post('/api/modules/:moduleId/quiz-submit', async (req, res) => {
+  const { moduleId } = req.params;
+  const { score, total } = req.body;
+
+  try {
+    console.log(`Quiz submitted for Module ${moduleId}: ${score}/${total}`);
+    
+    // Future database logging logic can be added here if needed
+
+    res.status(200).json({
+      success: true,
+      message: 'Quiz score submitted successfully!',
+      score,
+      total
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Quiz Submission Error:', errorMessage);
     res.status(500).json({
       success: false,
-      message:
-        'Could not fetch learning modules.',
+      message: 'Failed to record quiz score.'
     });
   }
 });
 
 
-// 📖 GET LESSONS FOR A MODULE
-
-app.get(
-  '/api/modules/:moduleId/lessons',
-  async (req, res) => {
-
-    const {
-      moduleId,
-    } = req.params;
-
-    try {
-
-      const result =
-        await pool.query(
-          `
-          SELECT
-            lesson_id,
-            module_id,
-            title,
-            summary,
-            content,
-            language,
-            duration,
-            difficulty,
-            lesson_order
-          FROM lessons
-          WHERE module_id = $1
-          ORDER BY lesson_order
-          `,
-          [moduleId]
-        );
-
-      res.status(200).json({
-        success: true,
-        lessons: result.rows,
-      });
-
-    } catch (error) {
-
-      console.error(
-        'Lessons Fetch Error:',
-        error
-      );
-
-      res.status(500).json({
-        success: false,
-        message:
-          'Could not fetch lessons.',
-      });
-    }
-  }
-);
-
-
-// 🤖 5. HERFUNDS AI CHAT ENDPOINT
+// 🤖 7. HERFUNDS AI CHAT ENDPOINT
 
 app.post('/api/ai/chat', async (req, res) => {
 
@@ -437,7 +439,7 @@ ${message}
 });
 
 
-// 🎮 6. GAMIFIED FINANCIAL SIMULATIONS
+// 🎮 8. GAMIFIED FINANCIAL SIMULATIONS
 
 app.use(
   '/api/simulations',
