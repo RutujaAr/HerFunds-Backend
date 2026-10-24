@@ -6,7 +6,6 @@ import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { GoogleGenAI } from '@google/genai';
 import pool from './config/db.js';
-import aiRoutes from './routes/ai.routes';
 
 // Simulation routes
 import simulationRoutes from './routes/simulationRoutes.js';
@@ -28,9 +27,6 @@ app.use(cors({
 }));
 
 app.use(express.json());
-
-// 🤖 AI Chatbot Routes
-app.use('/api/ai', aiRoutes);
 
 
 // 🔑 INITIALIZE GOOGLE AUTH CLIENT
@@ -402,7 +398,7 @@ Rules:
       await ai.models.generateContent({
 
         model:
-          'gemini-3.6-flash',
+          process.env.GEMINI_MODEL || 'gemini-2.5-flash',
 
         contents: `
 ${systemInstruction}
