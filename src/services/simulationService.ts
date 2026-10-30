@@ -41,7 +41,6 @@ import {
       salary - totalAllocated;
   
     let score = 100;
-  
     const feedback: string[] = [];
   
     if (remaining < 0) {
