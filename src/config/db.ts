@@ -5,13 +5,13 @@ dotenv.config();
 
 let connectionString = process.env.DATABASE_URL;
 
-// Override database name if it points to non-existent 'herfunds' database
+// Clean connection string if needed
 if (connectionString && (connectionString.toLowerCase().endsWith('/herfunds') || connectionString.toLowerCase().endsWith('/herfunds/'))) {
   connectionString = connectionString.replace(/\/herfunds\/?$/i, '/postgres');
 }
 
 const pool = connectionString
-  ? new pg.Pool({ connectionString })
+  ? new pg.Pool({ connectionString, ssl: { rejectUnauthorized: false } })
   : new pg.Pool({
       user: process.env.DB_USER || 'postgres',
       host: process.env.DB_HOST || 'localhost',
@@ -20,10 +20,11 @@ const pool = connectionString
       port: Number(process.env.DB_PORT) || 5432,
     });
 
-// Auto-initialize required tables on server startup if missing
-pool.on('connect', async (client) => {
+// 🚀 Execute table creation directly on startup
+export const initDB = async () => {
   try {
-    await client.query(`
+    console.log('Verifying and initializing database tables...');
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS public.users (
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
@@ -35,11 +36,13 @@ pool.on('connect', async (client) => {
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
+    console.log('✅ Users table successfully verified/created!');
   } catch (err) {
-    console.error('Table verification error:', err);
+    console.error('❌ Database initialization error:', err);
   }
-});
+};
+
+// Run initialization
+initDB();
 
 export default pool;
-
-   
