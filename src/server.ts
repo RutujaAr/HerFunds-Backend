@@ -14,7 +14,11 @@ import simulationRoutes from './routes/simulationRoutes.js';
 dotenv.config();
 
 // 🔑 INITIALIZE GEMINI AI CLIENT
-const apiKey = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6I8EQ-kwk4ONCeK9D1UQhEU8iGDgmaQkK9Q_OT6NYSqFg';
+const apiKey = process.env.GEMINI_API_KEY;
+
+if (!apiKey) {
+  throw new Error('GEMINI_API_KEY is missing in environment variables');
+}
 
 const ai = new GoogleGenAI({
   apiKey: apiKey,

@@ -11,7 +11,10 @@ if (connectionString && (connectionString.toLowerCase().endsWith('/herfunds') ||
 }
 
 const pool = connectionString
-  ? new pg.Pool({ connectionString, ssl: { rejectUnauthorized: false } })
+  ? new pg.Pool({ 
+      connectionString,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    })
   : new pg.Pool({
       user: process.env.DB_USER || 'postgres',
       host: process.env.DB_HOST || 'localhost',
@@ -20,10 +23,12 @@ const pool = connectionString
       port: Number(process.env.DB_PORT) || 5432,
     });
 
-// 🚀 Execute table creation directly on startup
+// 🚀 Force automatic table creation on startup
 export const initDB = async () => {
   try {
-    console.log('Verifying and initializing database tables...');
+    console.log('Verifying and creating required database tables...');
+    
+    // Create users table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS public.users (
         id SERIAL PRIMARY KEY,
@@ -36,13 +41,26 @@ export const initDB = async () => {
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
-    console.log('✅ Users table successfully verified/created!');
+
+    // Create user_badges table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS public.user_badges (
+        id SERIAL PRIMARY KEY,
+        user_id INT REFERENCES public.users(id) ON DELETE CASCADE,
+        module_id INT NOT NULL,
+        badge_name VARCHAR(255) NOT NULL,
+        unlocked_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(user_id, module_id)
+      );
+    `);
+
+    console.log('✅ Tables "users" and "user_badges" successfully verified/created!');
   } catch (err) {
-    console.error('❌ Database initialization error:', err);
+    console.error('❌ Database table initialization failed:', err);
   }
 };
 
-// Run initialization
+// Execute initialization
 initDB();
 
 export default pool;
