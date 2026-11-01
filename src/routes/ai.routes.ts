@@ -1,4 +1,3 @@
-
 import { Router, Request, Response } from 'express';
 
 const router = Router();
@@ -35,6 +34,8 @@ router.post('/chat', async (req: Request, res: Response) => {
       });
     }
 
+    console.log('Sending request to Gemini API...');
+
     const response = await fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
       {
@@ -58,8 +59,11 @@ router.post('/chat', async (req: Request, res: Response) => {
             maxOutputTokens: 1024,
           },
         }),
+        signal: AbortSignal.timeout(45000),
       }
     );
+
+    console.log('Gemini HTTP status:', response.status);
 
     const data: any = await response.json();
 
@@ -105,12 +109,14 @@ router.post('/chat', async (req: Request, res: Response) => {
     });
 
   } catch (error: any) {
-    console.error('Gemini Server Error:', error.message || error);
+    console.error('Gemini Server Error:', error);
+    console.error('Network Cause:', error?.cause);
 
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch AI response.',
-      error: error.message || 'Unknown server error',
+      error: error?.message || 'Unknown server error',
+      cause: error?.cause?.code || error?.cause?.message || 'Unknown network cause',
     });
   }
 });
