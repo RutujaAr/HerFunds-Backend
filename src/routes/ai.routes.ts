@@ -1,3 +1,4 @@
+
 import { Router, Request, Response } from 'express';
 
 const router = Router();
@@ -44,20 +45,12 @@ router.post('/chat', async (req: Request, res: Response) => {
         },
         body: JSON.stringify({
           systemInstruction: {
-            parts: [
-              {
-                text: HERFUNDS_SYSTEM_INSTRUCTION,
-              },
-            ],
+            parts: [{ text: HERFUNDS_SYSTEM_INSTRUCTION }],
           },
           contents: [
             {
               role: 'user',
-              parts: [
-                {
-                  text: message,
-                },
-              ],
+              parts: [{ text: message }],
             },
           ],
           generationConfig: {
@@ -68,14 +61,23 @@ router.post('/chat', async (req: Request, res: Response) => {
       }
     );
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     if (!response.ok) {
-      console.error('Gemini API Error:', data);
+      const errorMessage =
+        data?.error?.message || 'Unknown Gemini API error';
+
+      console.error('Gemini API Error:', {
+        status: response.status,
+        message: errorMessage,
+        statusText: data?.error?.status,
+      });
 
       return res.status(502).json({
         success: false,
         message: 'Gemini API request failed.',
+        error: errorMessage,
+        geminiStatus: response.status,
       });
     }
 
@@ -86,11 +88,14 @@ router.post('/chat', async (req: Request, res: Response) => {
         .trim();
 
     if (!responseText) {
-      console.error('Gemini returned an empty response:', data);
+      console.error('Gemini returned an empty response:', {
+        finishReason: data.candidates?.[0]?.finishReason,
+      });
 
       return res.status(502).json({
         success: false,
         message: 'No AI response generated.',
+        error: data.candidates?.[0]?.finishReason || 'Empty Gemini response',
       });
     }
 
@@ -100,11 +105,12 @@ router.post('/chat', async (req: Request, res: Response) => {
     });
 
   } catch (error: any) {
-    console.error('Gemini Server Error:', error);
+    console.error('Gemini Server Error:', error.message || error);
 
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch AI response.',
+      error: error.message || 'Unknown server error',
     });
   }
 });
