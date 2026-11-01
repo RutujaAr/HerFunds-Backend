@@ -16,7 +16,6 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 5000;
 
-// Required environment variables
 const requiredEnv = [
   'DATABASE_URL',
   'GEMINI_API_KEY',
@@ -31,12 +30,16 @@ for (const key of requiredEnv) {
 }
 
 const JWT_SECRET = process.env.JWT_SECRET!;
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID!);
+
+const googleClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID!
+);
+
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY!,
 });
 
-// Google client IDs accepted as token audiences
+// All accepted Google OAuth client IDs
 const googleAudiences = [
   process.env.GOOGLE_CLIENT_ID!,
   ...(process.env.GOOGLE_CLIENT_IDS || '')
@@ -63,7 +66,7 @@ app.get('/', (_req, res) => {
   });
 });
 
-// Health check including database connectivity
+// Database health check
 app.get('/api/health', async (_req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
@@ -218,6 +221,14 @@ app.post('/api/auth/google', async (req, res) => {
   }
 
   try {
+    // Debug token audience without logging the token itself
+    const decodedToken = jwt.decode(token) as
+      | { aud?: string }
+      | null;
+
+    console.log('Google token audience:', decodedToken?.aud);
+    console.log('Backend accepted audiences:', googleAudiences);
+
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
       audience: googleAudiences,
@@ -526,7 +537,7 @@ app.get('/api/users/:userId/badges', async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: 'Failed to fetch user badges.',
+      message: 'Failed to fetch badges.',
     });
   }
 });
@@ -661,7 +672,7 @@ app.use((_req, res) => {
   });
 });
 
-// Start only after database connectivity is verified
+// Start server after database connection is verified
 const startServer = async () => {
   try {
     await initDB();
