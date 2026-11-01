@@ -8,7 +8,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { GoogleGenAI } from '@google/genai';
 
 import pool, { initDB } from './config/db.js';
-import aiRoutes from './routes/ai.routes';
+import aiRoutes from './routes/ai.routes.js';
 import simulationRoutes from './routes/simulationRoutes.js';
 
 dotenv.config();
@@ -17,7 +17,12 @@ const app = express();
 const PORT = Number(process.env.PORT) || 5000;
 
 // Required environment variables
-const requiredEnv = ['DATABASE_URL', 'GEMINI_API_KEY', 'JWT_SECRET', 'GOOGLE_CLIENT_ID'];
+const requiredEnv = [
+  'DATABASE_URL',
+  'GEMINI_API_KEY',
+  'JWT_SECRET',
+  'GOOGLE_CLIENT_ID',
+];
 
 for (const key of requiredEnv) {
   if (!process.env[key]) {
@@ -27,10 +32,11 @@ for (const key of requiredEnv) {
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID!);
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY!,
+});
 
-// Google client IDs accepted as token audiences.
-// Add all required client IDs as comma-separated values in GOOGLE_CLIENT_IDS.
+// Google client IDs accepted as token audiences
 const googleAudiences = [
   process.env.GOOGLE_CLIENT_ID!,
   ...(process.env.GOOGLE_CLIENT_IDS || '')
@@ -61,6 +67,7 @@ app.get('/', (_req, res) => {
 app.get('/api/health', async (_req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
+
     res.status(200).json({
       status: 'Online',
       database: 'Connected',
@@ -68,6 +75,7 @@ app.get('/api/health', async (_req, res) => {
     });
   } catch (error) {
     console.error('Health check database error:', error);
+
     res.status(503).json({
       status: 'Database Error',
       database: 'Disconnected',
@@ -119,6 +127,7 @@ app.get('/api/daily-tips', (_req, res) => {
     (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) /
     86400000
   );
+
   const currentTip = FINANCIAL_TIPS[day % FINANCIAL_TIPS.length];
 
   res.json({
@@ -174,9 +183,12 @@ app.post('/api/auth/register', async (req, res) => {
     );
 
     const user = result.rows[0];
-    const token = jwt.sign({ id: user.id }, JWT_SECRET, {
-      expiresIn: '24h',
-    });
+
+    const token = jwt.sign(
+      { id: user.id },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
     return res.status(201).json({
       success: true,
@@ -186,6 +198,7 @@ app.post('/api/auth/register', async (req, res) => {
     });
   } catch (error) {
     console.error('Registration error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Unable to register user.',
@@ -205,7 +218,6 @@ app.post('/api/auth/google', async (req, res) => {
   }
 
   try {
-    // Always verify the Google ID token. Never trust jwt.decode() alone.
     const ticket = await googleClient.verifyIdToken({
       idToken: token,
       audience: googleAudiences,
@@ -290,6 +302,7 @@ app.get('/api/modules', async (_req, res) => {
     return res.json({ success: true, modules });
   } catch (error) {
     console.error('Fetch modules error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch learning modules.',
@@ -297,11 +310,26 @@ app.get('/api/modules', async (_req, res) => {
   }
 });
 
-// Banking details
+// Banking lessons (Module ID: 5)
 app.get('/api/banking-details', async (_req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM public.banking_module_detailed ORDER BY id ASC'
+      `SELECT
+         lesson_id,
+         module_id,
+         title,
+         summary,
+         content,
+         duration,
+         difficulty,
+         lesson_order,
+         image_url,
+         audio_url,
+         video_url
+       FROM public.lessons
+       WHERE module_id = $1
+       ORDER BY lesson_order ASC`,
+      [5]
     );
 
     return res.json({
@@ -309,10 +337,11 @@ app.get('/api/banking-details', async (_req, res) => {
       data: result.rows,
     });
   } catch (error) {
-    console.error('Fetch banking details error:', error);
+    console.error('Fetch banking lessons error:', error);
+
     return res.status(500).json({
       success: false,
-      message: 'Failed to fetch banking details.',
+      message: 'Failed to fetch banking lessons.',
     });
   }
 });
@@ -351,6 +380,7 @@ app.get('/api/modules/:moduleId/lessons', async (req, res) => {
     return res.json({ success: true, lessons });
   } catch (error) {
     console.error('Fetch lessons error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch lessons.',
@@ -402,6 +432,7 @@ app.get('/api/modules/:moduleId/quiz', async (req, res) => {
     return res.json({ success: true, questions });
   } catch (error) {
     console.error('Fetch quiz error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch quiz questions.',
@@ -467,6 +498,7 @@ app.post('/api/modules/:moduleId/quiz-submit', async (req, res) => {
     });
   } catch (error) {
     console.error('Quiz submission error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to record quiz score.',
@@ -491,6 +523,7 @@ app.get('/api/users/:userId/badges', async (req, res) => {
     });
   } catch (error) {
     console.error('Fetch badges error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch user badges.',
@@ -517,6 +550,7 @@ app.get('/api/users/:userId/streak', async (req, res) => {
 
     const user = result.rows[0];
     const today = new Date().toISOString().split('T')[0];
+
     const lastCheckin = user.last_checkin_date
       ? new Date(user.last_checkin_date).toISOString().split('T')[0]
       : null;
@@ -528,6 +562,7 @@ app.get('/api/users/:userId/streak', async (req, res) => {
     });
   } catch (error) {
     console.error('Fetch streak error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch streak.',
@@ -563,6 +598,7 @@ app.post('/api/users/:userId/streak-checkin', async (req, res) => {
     });
   } catch (error) {
     console.error('Update streak error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to update streak.',
@@ -606,6 +642,7 @@ a personal financial advisor. Be supportive and concise.
     });
   } catch (error) {
     console.error('HerFunds AI error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'HerFunds AI could not process your request.',
