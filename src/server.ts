@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -5,556 +6,578 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { GoogleGenAI } from '@google/genai';
-import pool from './config/db.js';
-import aiRoutes from './routes/ai.routes';
 
-// Simulation routes
+import pool, { initDB } from './config/db.js';
+import aiRoutes from './routes/ai.routes';
 import simulationRoutes from './routes/simulationRoutes.js';
 
 dotenv.config();
 
-// 🔑 INITIALIZE GEMINI AI CLIENT
-const apiKey = process.env.GEMINI_API_KEY;
+const app = express();
+const PORT = Number(process.env.PORT) || 5000;
 
-if (!apiKey) {
-  throw new Error('GEMINI_API_KEY is missing in environment variables');
+// Required environment variables
+const requiredEnv = ['DATABASE_URL', 'GEMINI_API_KEY', 'JWT_SECRET', 'GOOGLE_CLIENT_ID'];
+
+for (const key of requiredEnv) {
+  if (!process.env[key]) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
 }
 
-const ai = new GoogleGenAI({
-  apiKey: apiKey,
-});
+const JWT_SECRET = process.env.JWT_SECRET!;
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID!);
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
-const app = express();
-const PORT = process.env.PORT || 5000;
+// Google client IDs accepted as token audiences.
+// Add all required client IDs as comma-separated values in GOOGLE_CLIENT_IDS.
+const googleAudiences = [
+  process.env.GOOGLE_CLIENT_ID!,
+  ...(process.env.GOOGLE_CLIENT_IDS || '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean),
+];
 
-// 🌐 Middleware Configuration
 app.use(cors({
-  origin: '*', // Allows requests from any origin during development
+  origin: process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
+    : '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// 🤖 AI Chatbot Routes
-app.use('/api/ai', aiRoutes);
+// Basic server status
+app.get('/', (_req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'HerFunds Backend is running',
+  });
+});
 
+// Health check including database connectivity
+app.get('/api/health', async (_req, res) => {
+  try {
+    const result = await pool.query('SELECT NOW()');
+    res.status(200).json({
+      status: 'Online',
+      database: 'Connected',
+      databaseTime: result.rows[0].now,
+    });
+  } catch (error) {
+    console.error('Health check database error:', error);
+    res.status(503).json({
+      status: 'Database Error',
+      database: 'Disconnected',
+    });
+  }
+});
 
-// 🔑 INITIALIZE GOOGLE AUTH CLIENT
-const GOOGLE_CLIENT_ID =
-  "1058256639702-ui0bbo682f3itque8029bf8qcrdbdnc1.apps.googleusercontent.com";
-
-const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
-
-
-// 💡 ROTATING DAILY FINANCIAL TIPS DATASET
+// Daily financial tips
 const FINANCIAL_TIPS = [
   {
     id: 1,
-    tip: "Always maintain an emergency fund equal to 6 months of absolute expenses before executing volatile investments.",
-    category: "Emergency Fund"
+    tip: 'Maintain an emergency fund for unexpected expenses.',
+    category: 'Emergency Fund',
   },
   {
     id: 2,
-    tip: "In Rupee Cost Averaging, you automatically buy more mutual fund units when market prices are low and fewer units when prices are high.",
-    category: "SIP Investment"
+    tip: 'SIP investments can help build a regular investing habit.',
+    category: 'SIP Investment',
   },
   {
     id: 3,
-    tip: "Financial experts recommend maintaining a credit utilisation ratio below 30% to protect your credit score.",
-    category: "Credit Score"
+    tip: 'Keep your credit utilisation low to help maintain a healthy credit profile.',
+    category: 'Credit Score',
   },
   {
     id: 4,
-    tip: "Failing to provide a valid PAN card to your bank or employer results in TDS deduction at a flat rate of 20%.",
-    category: "Tax Compliance"
+    tip: 'Understand applicable TDS rules for your income and transactions.',
+    category: 'Tax Compliance',
   },
   {
     id: 5,
-    tip: "Submit Form 15G or 15H to banks to prevent unnecessary TDS deduction if your annual income falls below the taxable threshold.",
-    category: "Tax Saving"
+    tip: 'Check whether you are eligible for applicable tax deductions.',
+    category: 'Tax Saving',
   },
   {
     id: 6,
-    tip: "Under the Old Tax Regime, Section 80C provides a maximum deduction limit of ₹1,50,000 using ELSS, PPF, and Insurance.",
-    category: "Tax Regime"
+    tip: 'Understand the tax benefits and limits applicable to your chosen tax regime.',
+    category: 'Tax Regime',
   },
   {
     id: 7,
-    tip: "Top-Up (Step-Up) SIP allows you to automatically increase your monthly contribution as your salary grows over time.",
-    category: "Smart SIP"
-  }
+    tip: 'Review your budget and savings contributions regularly.',
+    category: 'Smart Saving',
+  },
 ];
 
+app.get('/api/daily-tips', (_req, res) => {
+  const day = Math.floor(
+    (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) /
+    86400000
+  );
+  const currentTip = FINANCIAL_TIPS[day % FINANCIAL_TIPS.length];
 
-// 📝 1. MANUAL USER REGISTRATION ENDPOINT (WITH FAIL-SAFE FALLBACK)
+  res.json({
+    success: true,
+    dailyTip: currentTip,
+    allTips: FINANCIAL_TIPS,
+  });
+});
+
+// Manual registration
 app.post('/api/auth/register', async (req, res) => {
-  const {
-    name,
-    email,
-    password,
-    knowledgeLevel,
-  } = req.body;
+  const { name, email, password, knowledgeLevel } = req.body;
+
+  if (
+    typeof name !== 'string' ||
+    typeof email !== 'string' ||
+    typeof password !== 'string' ||
+    !name.trim() ||
+    !email.trim() ||
+    password.length < 8
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: 'Valid name, email, and password of at least 8 characters are required.',
+    });
+  }
 
   try {
-    const userExists = await pool.query(
-      'SELECT * FROM users WHERE email = $1',
-      [email]
+    const existing = await pool.query(
+      'SELECT id FROM public.users WHERE email = $1',
+      [email.trim().toLowerCase()]
     );
 
-    if (userExists.rows.length > 0) {
-      return res.status(400).json({
+    if (existing.rows.length > 0) {
+      return res.status(409).json({
         success: false,
         message: 'Email is already registered.',
       });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+    const hashedPassword = await bcrypt.hash(password, 12);
 
-    let newUser;
-    try {
-      // Primary Attempt with knowledge_level
-      newUser = await pool.query(
-        `
-        INSERT INTO users (name, email, password, knowledge_level)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, name, email
-        `,
-        [name, email, hashedPassword, knowledgeLevel || 'Beginner']
-      );
-    } catch (dbErr) {
-      console.warn("Retrying registration with basic schema (name, email, password)...");
-      // Fallback Attempt for default schema
-      newUser = await pool.query(
-        `
-        INSERT INTO users (name, email, password)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, email
-        `,
-        [name, email, hashedPassword]
-      );
-    }
-
-    const token = jwt.sign(
-      { id: newUser.rows[0].id },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: '24h' }
+    const result = await pool.query(
+      `INSERT INTO public.users (name, email, password, knowledge_level)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, email`,
+      [
+        name.trim(),
+        email.trim().toLowerCase(),
+        hashedPassword,
+        knowledgeLevel || 'Beginner',
+      ]
     );
 
-    res.status(201).json({
-      success: true,
-      message: 'Account created successfully!',
-      token,
-      user: newUser.rows[0],
+    const user = result.rows[0];
+    const token = jwt.sign({ id: user.id }, JWT_SECRET, {
+      expiresIn: '24h',
     });
 
+    return res.status(201).json({
+      success: true,
+      message: 'Account created successfully.',
+      token,
+      user,
+    });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Registration Error:', errorMessage);
-
-    res.status(500).json({
+    console.error('Registration error:', error);
+    return res.status(500).json({
       success: false,
-      message: 'Server error processing registration. Details: ' + errorMessage,
+      message: 'Unable to register user.',
     });
   }
 });
 
-
-// 🌐 2. MOBILE GOOGLE SIGN-IN / SIGN-UP ENDPOINT
+// Google Sign-In
 app.post('/api/auth/google', async (req, res) => {
   const { token } = req.body;
 
+  if (typeof token !== 'string' || !token) {
+    return res.status(400).json({
+      success: false,
+      message: 'Google ID token is required.',
+    });
+  }
+
   try {
-    let name = "Google User";
-    let email = "";
+    // Always verify the Google ID token. Never trust jwt.decode() alone.
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: googleAudiences,
+    });
 
-    try {
-      const ticket = await googleClient.verifyIdToken({
-        idToken: token,
-        audience: [
-          "1058256639702-kf6keqod679iifii1jvudn89r9f3e621.apps.googleusercontent.com",
-          "1058256639702-ui0bbo682f3itque8029bf8qcrdbdnc1.apps.googleusercontent.com",
-          "1058256639702-u2ns0js02n7srtqp1l6oo5sqhjj66gvq.apps.googleusercontent.com"  
-        ],
-      });
-      const payload = ticket.getPayload();
-      if (payload) {
-        name = payload.name || name;
-        email = payload.email || email;
-      }
-    } catch (verifyError) {
-      console.warn("Strict Google token verification skipped, attempting direct decode...");
-      const decoded: any = jwt.decode(token);
-      if (decoded && decoded.email) {
-        name = decoded.name || name;
-        email = decoded.email;
-      } else {
-        throw verifyError;
-      }
-    }
+    const payload = ticket.getPayload();
 
-    if (!email) {
-      return res.status(400).json({
+    if (!payload || !payload.email || !payload.email_verified) {
+      return res.status(401).json({
         success: false,
-        message: 'Could not extract email address from Google authentication token.',
+        message: 'Google account verification failed.',
       });
     }
 
-    let userResult = await pool.query(
-      'SELECT * FROM users WHERE email = $1',
+    const name = payload.name || 'Google User';
+    const email = payload.email.toLowerCase();
+
+    let result = await pool.query(
+      `SELECT id, name, email
+       FROM public.users
+       WHERE email = $1`,
       [email]
     );
 
-    let user = userResult.rows[0];
+    let user = result.rows[0];
 
     if (!user) {
       const placeholderPassword = await bcrypt.hash(
-        Math.random().toString(36),
-        10
+        `${Date.now()}-${Math.random()}`,
+        12
       );
 
-      let newUser;
-      try {
-        newUser = await pool.query(
-          `
-          INSERT INTO users (name, email, password, knowledge_level)
-          VALUES ($1, $2, $3, $4)
-          RETURNING id, name, email
-          `,
-          [name, email, placeholderPassword, 'Beginner']
-        );
-      } catch (err) {
-        newUser = await pool.query(
-          `
-          INSERT INTO users (name, email, password)
-          VALUES ($1, $2, $3)
-          RETURNING id, name, email
-          `,
-          [name, email, placeholderPassword]
-        );
-      }
+      result = await pool.query(
+        `INSERT INTO public.users
+         (name, email, password, knowledge_level)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, name, email`,
+        [name, email, placeholderPassword, 'Beginner']
+      );
 
-      user = newUser.rows[0];
+      user = result.rows[0];
     }
 
     const sessionToken = jwt.sign(
       { id: user.id },
-      process.env.JWT_SECRET || 'secret',
+      JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Google Sign-In successful!',
+      message: 'Google Sign-In successful.',
       token: sessionToken,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-      },
+      user,
     });
-
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Google Auth Error:', errorMessage);
+    console.error('Google authentication error:', error);
 
-    res.status(500).json({
+    return res.status(401).json({
       success: false,
-      message: 'Google authentication processing error: ' + errorMessage,
+      message: 'Google authentication failed. Please sign in again.',
     });
   }
 });
 
-
-// 🩺 3. DATABASE HEALTH CHECK ENDPOINT
-app.get('/api/health', async (req, res) => {
-  try {
-    const dbCheck = await pool.query('SELECT NOW()');
-
-    res.json({
-      status: 'Online',
-      databaseTime: dbCheck.rows[0].now,
-    });
-
-  } catch (err) {
-    res.status(500).json({
-      status: 'Database Error',
-      error: err,
-    });
-  }
-});
-
-
-// 💡 3.1 GET ROTATING DAILY FINANCIAL TIPS
-app.get('/api/daily-tips', (req, res) => {
-  const dayOfYear = new Date().getDate();
-  const index = dayOfYear % FINANCIAL_TIPS.length;
-  const currentTip = FINANCIAL_TIPS[index];
-
-  res.status(200).json({
-    success: true,
-    dailyTip: currentTip,
-    allTips: FINANCIAL_TIPS
-  });
-});
-
-
-// 📚 4. GET ALL LEARNING MODULES ENDPOINT
-app.get('/api/modules', async (req, res) => {
+// Learning modules
+app.get('/api/modules', async (_req, res) => {
   try {
     const result = await pool.query(
-      'SELECT module_id, title, description, module_order FROM public.modules ORDER BY module_order ASC'
+      `SELECT module_id, title, description, module_order
+       FROM public.modules
+       ORDER BY module_order ASC`
     );
-    
-    const formattedModules = result.rows.map(m => ({
-      id: m.module_id,
-      title: m.title,
-      description: m.description,
-      module_order: m.module_order
+
+    const modules = result.rows.map(module => ({
+      id: module.module_id,
+      title: module.title,
+      description: module.description,
+      module_order: module.module_order,
     }));
 
-    res.status(200).json({
-      success: true,
-      modules: formattedModules
-    });
+    return res.json({ success: true, modules });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Fetch Modules Error Details:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch learning modules.', error: errorMessage });
+    console.error('Fetch modules error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch learning modules.',
+    });
   }
 });
 
-
-// 📖 4.1 GET BANKING MODULE DETAILED CONTENT
-app.get('/api/banking-details', async (req, res) => {
+// Banking details
+app.get('/api/banking-details', async (_req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM banking_module_detailed ORDER BY id ASC'
+      'SELECT * FROM public.banking_module_detailed ORDER BY id ASC'
     );
-    
-    res.status(200).json({
+
+    return res.json({
       success: true,
-      data: result.rows
+      data: result.rows,
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Fetch Banking Details Error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch banking details.', 
-      error: errorMessage 
+    console.error('Fetch banking details error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch banking details.',
     });
   }
 });
 
-
-// 📖 5. GET LESSONS FOR A SPECIFIC MODULE
+// Lessons for a module
 app.get('/api/modules/:moduleId/lessons', async (req, res) => {
-  const { moduleId } = req.params;
+  const moduleId = Number(req.params.moduleId);
+
+  if (!Number.isInteger(moduleId) || moduleId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid module ID.',
+    });
+  }
+
   try {
     const result = await pool.query(
-      'SELECT * FROM public.lessons WHERE module_id = $1 ORDER BY lesson_order ASC',
+      `SELECT *
+       FROM public.lessons
+       WHERE module_id = $1
+       ORDER BY lesson_order ASC`,
       [moduleId]
     );
 
-    const formattedLessons = result.rows.map(l => ({
-      id: l.lesson_id,
-      module_id: l.module_id,
-      title: l.title,
-      summary: l.summary,
-      content: l.content,
-      duration: l.duration,
-      difficulty: l.difficulty,
-      lesson_order: l.lesson_order
+    const lessons = result.rows.map(lesson => ({
+      id: lesson.lesson_id,
+      module_id: lesson.module_id,
+      title: lesson.title,
+      summary: lesson.summary,
+      content: lesson.content,
+      duration: lesson.duration,
+      difficulty: lesson.difficulty,
+      lesson_order: lesson.lesson_order,
     }));
 
-    res.status(200).json({
-      success: true,
-      lessons: formattedLessons
-    });
+    return res.json({ success: true, lessons });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Fetch Lessons Error Details:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch lessons.', error: errorMessage });
+    console.error('Fetch lessons error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch lessons.',
+    });
   }
 });
 
-// ❓ 5.1 GET QUIZ QUESTIONS FOR A SPECIFIC MODULE
+// Quiz questions for a module
 app.get('/api/modules/:moduleId/quiz', async (req, res) => {
-  const { moduleId } = req.params;
+  const moduleId = Number(req.params.moduleId);
+
+  if (!Number.isInteger(moduleId) || moduleId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid module ID.',
+    });
+  }
+
   try {
     const result = await pool.query(
-      'SELECT question_id, module_id, question_text, option_a, option_b, option_c, option_d, correct_option FROM public.quiz_questions WHERE module_id = $1 ORDER BY question_id ASC',
+      `SELECT question_id, module_id, question_text,
+              option_a, option_b, option_c, option_d, correct_option
+       FROM public.quiz_questions
+       WHERE module_id = $1
+       ORDER BY question_id ASC`,
       [moduleId]
     );
 
-    const formattedQuestions = result.rows.map(q => ({
-      id: q.question_id,
-      question_id: q.question_id,
-      module_id: q.module_id,
-      question: q.question_text,
-      question_text: q.question_text,
-      options: [q.option_a, q.option_b, q.option_c, q.option_d],
-      option_a: q.option_a,
-      option_b: q.option_b,
-      option_c: q.option_c,
-      option_d: q.option_d,
-      correctOption: q.correct_option,
-      correct_option: q.correct_option
+    const questions = result.rows.map(question => ({
+      id: question.question_id,
+      question_id: question.question_id,
+      module_id: question.module_id,
+      question: question.question_text,
+      question_text: question.question_text,
+      options: [
+        question.option_a,
+        question.option_b,
+        question.option_c,
+        question.option_d,
+      ],
+      option_a: question.option_a,
+      option_b: question.option_b,
+      option_c: question.option_c,
+      option_d: question.option_d,
+      correctOption: question.correct_option,
+      correct_option: question.correct_option,
     }));
 
-    res.status(200).json({
-      success: true,
-      questions: formattedQuestions
-    });
+    return res.json({ success: true, questions });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Fetch Quiz Error Details:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch quiz questions.', error: errorMessage });
+    console.error('Fetch quiz error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch quiz questions.',
+    });
   }
 });
 
-// 🎯 6. SUBMIT MODULE QUIZ SCORE & UNLOCK BADGE DYNAMICALLY
+// Submit quiz and unlock badge
 app.post('/api/modules/:moduleId/quiz-submit', async (req, res) => {
-  const { moduleId } = req.params;
+  const moduleId = Number(req.params.moduleId);
   const { userId, score, total } = req.body;
 
+  if (
+    !Number.isInteger(moduleId) ||
+    moduleId <= 0 ||
+    !Number.isFinite(score) ||
+    !Number.isFinite(total) ||
+    total <= 0 ||
+    score < 0 ||
+    score > total
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid quiz submission.',
+    });
+  }
+
   try {
-    console.log(`Quiz submitted for Module ${moduleId} by User ${userId}: ${score}/${total}`);
-    
-    // Check if score is passing (e.g., 60% or more)
-    const passingScore = Math.ceil(total * 0.6);
-    const isPassed = score >= passingScore;
-    let badgeName = null;
+    const passed = score >= Math.ceil(total * 0.6);
 
-    if (isPassed) {
-      const numericModuleId = Number(moduleId);
-      
-      // Clean, standardized badge names across all 7 modules
-      const badgeMap: { [key: number]: string } = {
-        1: 'Finance Basics',
-        2: 'Mutual Fund Guide',
-        3: 'SIP Learner',
-        4: 'Digital Finance User',
-        5: 'Banking Essentials',
-        6: 'Investment Basics',
-        7: 'Tax Awareness'
-      };
+    const badgeMap: Record<number, string> = {
+      1: 'Finance Basics',
+      2: 'Mutual Fund Guide',
+      3: 'SIP Learner',
+      4: 'Digital Finance User',
+      5: 'Banking Essentials',
+      6: 'Investment Basics',
+      7: 'Tax Awareness',
+    };
 
-      badgeName = badgeMap[numericModuleId] || 'Smart Investor';
+    const badgeName = passed
+      ? badgeMap[moduleId] || 'Smart Investor'
+      : null;
 
-      // Record unlocked badge in database if user_id is provided
-      if (userId) {
-        await pool.query(
-          `INSERT INTO public.user_badges (user_id, module_id, badge_name, unlocked_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (user_id, module_id) DO UPDATE SET badge_name = EXCLUDED.badge_name`,
-          [userId, moduleId, badgeName]
-        );
-      }
+    if (passed && userId) {
+      await pool.query(
+        `INSERT INTO public.user_badges
+         (user_id, module_id, badge_name, unlocked_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (user_id, module_id)
+         DO UPDATE SET badge_name = EXCLUDED.badge_name`,
+        [userId, moduleId, badgeName]
+      );
     }
 
-    res.status(200).json({
+    return res.json({
       success: true,
-      message: 'Quiz score submitted successfully!',
+      message: 'Quiz score submitted successfully.',
       score,
       total,
-      badgeUnlocked: isPassed,
-      badgeName: badgeName
+      badgeUnlocked: passed,
+      badgeName,
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Quiz Submission Error:', errorMessage);
-    res.status(500).json({
+    console.error('Quiz submission error:', error);
+    return res.status(500).json({
       success: false,
-      message: 'Failed to record quiz score.'
+      message: 'Failed to record quiz score.',
     });
   }
 });
 
-// 🏅 6.1 GET UNLOCKED BADGES FOR A SPECIFIC USER
+// User badges
 app.get('/api/users/:userId/badges', async (req, res) => {
-  const { userId } = req.params;
   try {
     const result = await pool.query(
-      'SELECT module_id, badge_name, unlocked_at FROM public.user_badges WHERE user_id = $1 ORDER BY module_id ASC',
-      [userId]
+      `SELECT module_id, badge_name, unlocked_at
+       FROM public.user_badges
+       WHERE user_id = $1
+       ORDER BY module_id ASC`,
+      [req.params.userId]
     );
 
-    res.status(200).json({
+    return res.json({
       success: true,
-      badges: result.rows
+      badges: result.rows,
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('Fetch User Badges Error:', errorMessage);
-    res.status(500).json({ success: false, message: 'Failed to fetch user badges.', error: errorMessage });
+    console.error('Fetch badges error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user badges.',
+    });
   }
 });
 
-
-// 🔥 6.2 GET & UPDATE USER STREAK ENDPOINTS
+// Get user streak
 app.get('/api/users/:userId/streak', async (req, res) => {
-  const { userId } = req.params;
   try {
     const result = await pool.query(
-      'SELECT streak_count, last_checkin_date FROM public.users WHERE id = $1',
-      [userId]
+      `SELECT streak_count, last_checkin_date
+       FROM public.users
+       WHERE id = $1`,
+      [req.params.userId]
     );
 
     if (result.rows.length === 0) {
-      return res.status(200).json({ success: true, streak: 3, checkedInToday: false });
+      return res.status(404).json({
+        success: false,
+        message: 'User not found.',
+      });
     }
 
     const user = result.rows[0];
     const today = new Date().toISOString().split('T')[0];
-    const lastCheckin = user.last_checkin_date ? new Date(user.last_checkin_date).toISOString().split('T')[0] : null;
+    const lastCheckin = user.last_checkin_date
+      ? new Date(user.last_checkin_date).toISOString().split('T')[0]
+      : null;
 
-    res.status(200).json({
+    return res.json({
       success: true,
-      streak: user.streak_count || 3,
-      checkedInToday: lastCheckin === today
+      streak: user.streak_count || 0,
+      checkedInToday: lastCheckin === today,
     });
   } catch (error) {
-    res.status(200).json({ success: true, streak: 3, checkedInToday: false });
+    console.error('Fetch streak error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch streak.',
+    });
   }
 });
 
+// Update user streak
 app.post('/api/users/:userId/streak-checkin', async (req, res) => {
-  const { userId } = req.params;
   try {
     const today = new Date().toISOString().split('T')[0];
+
     const result = await pool.query(
-      `UPDATE public.users 
-       SET streak_count = COALESCE(streak_count, 0) + 1, last_checkin_date = $1 
-       WHERE id = $2 
+      `UPDATE public.users
+       SET streak_count = COALESCE(streak_count, 0) + 1,
+           last_checkin_date = $1
+       WHERE id = $2
        RETURNING streak_count`,
-      [today, userId]
+      [today, req.params.userId]
     );
 
-    const newStreak = result.rows[0]?.streak_count || 4;
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found.',
+      });
+    }
 
-    res.status(200).json({
+    return res.json({
       success: true,
-      message: 'Streak updated successfully!',
-      streak: newStreak
+      message: 'Streak updated successfully.',
+      streak: result.rows[0].streak_count,
     });
   } catch (error) {
-    res.status(200).json({
-      success: true,
-      message: 'Streak updated locally!',
-      streak: 4
+    console.error('Update streak error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update streak.',
     });
   }
 });
 
+// AI chatbot routes
+app.use('/api/ai', aiRoutes);
 
-// 🤖 7. HERFUNDS AI CHAT ENDPOINT
+// AI chat endpoint
 app.post('/api/ai/chat', async (req, res) => {
   const { message } = req.body;
 
-  if (!message || typeof message !== 'string') {
+  if (typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({
       success: false,
       message: 'Please provide a valid message.',
@@ -563,29 +586,12 @@ app.post('/api/ai/chat', async (req, res) => {
 
   try {
     const systemInstruction = `
-You are HerFunds AI, the financial literacy assistant inside the HerFunds application.
-
-Your purpose is to educate users about:
-- Personal finance
-- Saving and budgeting
-- Banking
-- Digital payments and financial safety
-- Investments and basic financial concepts
-- Loans and EMIs
-- Taxation
-- Government financial schemes
-- Financial planning concepts
-
-Rules:
-1. Explain financial concepts in simple language suitable for beginners.
-2. Be supportive, clear and non-judgmental.
-3. Use Indian financial context when relevant, including ₹, UPI, SIP, CIBIL, RBI, etc.
-4. Do not pretend to be a personal financial advisor.
-5. Do not guarantee investment returns or tell users that a specific investment will definitely make money.
-6. For personalized investment decisions, explain the factors the user should consider and recommend consulting a qualified financial professional when appropriate.
-7. If the question is unrelated to finance or financial literacy, politely explain that you are designed primarily for HerFunds financial education.
-8. Keep normal answers concise and easy to understand.
-9. Use examples when they make a concept easier to understand.
+You are HerFunds AI, a financial literacy assistant.
+Explain personal finance, saving, budgeting, banking, digital payments,
+investments, loans, taxation and financial planning in simple language.
+Use Indian financial context when relevant, including ₹, UPI, SIP,
+CIBIL and RBI. Do not guarantee investment returns or pretend to be
+a personal financial advisor. Be supportive and concise.
 `;
 
     const response = await ai.models.generateContent({
@@ -593,16 +599,13 @@ Rules:
       contents: `${systemInstruction}\n\nUser question:\n${message}`,
     });
 
-    const reply = response.text || 'I could not generate a response right now. Please try again.';
-
-    return res.status(200).json({
+    return res.json({
       success: true,
-      reply,
+      reply: response.text ||
+        'I could not generate a response right now. Please try again.',
     });
-
   } catch (error) {
-    console.error('HerFunds AI Error:', error);
-
+    console.error('HerFunds AI error:', error);
     return res.status(500).json({
       success: false,
       message: 'HerFunds AI could not process your request.',
@@ -610,20 +613,29 @@ Rules:
   }
 });
 
-
-// 🎮 8. GAMIFIED FINANCIAL SIMULATIONS
+// Financial simulations
 app.use('/api/simulations', simulationRoutes);
 
+// Handle unknown routes
+app.use((_req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'API route not found.',
+  });
+});
 
-// 🚀 START SERVER LISTENING
-const serverPort = Number(PORT) || 5000;
+// Start only after database connectivity is verified
+const startServer = async () => {
+  try {
+    await initDB();
 
-app.listen(
-  serverPort,
-  '0.0.0.0',
-  () => {
-    console.log(
-      `HerFunds Backend running cleanly on port ${serverPort} across all adapters`
-    );
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`HerFunds Backend running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error('Backend startup failed: database connection unavailable.');
+    process.exit(1);
   }
-);
+};
+
+startServer();
