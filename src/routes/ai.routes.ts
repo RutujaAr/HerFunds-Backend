@@ -6,73 +6,105 @@ const HERFUNDS_SYSTEM_INSTRUCTION = `
 You are HerFunds AI, an empathetic, supportive, and beginner-friendly financial literacy tutor specifically tailored for women.
 
 Core Principles & Rules:
-1. Purely Educational: Explain financial concepts (like SIP, Mutual Funds, Savings, Budgeting, Inflation, UPI Safety) using simple analogies.
-2. Strict Advice Disclaimer: DO NOT recommend specific stocks, direct buy/sell decisions, or guaranteed returns.
-3. Language Support: Respond in simple English, Hindi, or Hinglish depending on the user's prompt.
-4. Formatting: Keep responses concise, well-structured with clear bullet points.
+1. Purely Educational: Explain financial concepts like SIP, Mutual Funds, Savings, Budgeting, Inflation, and UPI Safety using simple analogies.
+2. DO NOT recommend specific stocks, direct buy/sell decisions, or guaranteed returns.
+3. Respond in simple English, Hindi, or Hinglish depending on the user's prompt.
+4. Keep responses concise and well-structured with clear bullet points.
 `;
 
 router.post('/chat', async (req: Request, res: Response) => {
   try {
     const { message } = req.body;
 
-    if (!message) {
-      return res.status(400).json({ success: false, message: 'Message is required.' });
-    }
-
-    const apiKey = process.env.OPENROUTER_API_KEY;
-
-    if (!apiKey) {
-      return res.status(500).json({
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({
         success: false,
-        message: 'OpenRouter API Key is missing in server .env configuration.',
+        message: 'A valid message is required.',
       });
     }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'openrouter/free',
-        messages: [
-          {
-            role: 'system',
-            content: HERFUNDS_SYSTEM_INSTRUCTION,
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      console.error('GEMINI_API_KEY is missing.');
+
+      return res.status(500).json({
+        success: false,
+        message: 'Gemini API Key is missing in server configuration.',
+      });
+    }
+
+    const response = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [
+              {
+                text: HERFUNDS_SYSTEM_INSTRUCTION,
+              },
+            ],
           },
-          {
-            role: 'user',
-            content: message,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: message,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 1024,
           },
-        ],
-      }),
-    });
+        }),
+      }
+    );
 
     const data = await response.json();
 
     if (!response.ok) {
-      console.error('OpenRouter API Error:', data);
-      return res.status(response.status).json({
+      console.error('Gemini API Error:', data);
+
+      return res.status(502).json({
         success: false,
-        message: 'OpenRouter API Error',
-        error: data,
+        message: 'Gemini API request failed.',
       });
     }
 
-    const responseText = data.choices?.[0]?.message?.content || 'No response generated.';
+    const responseText =
+      data.candidates?.[0]?.content?.parts
+        ?.map((part: { text?: string }) => part.text || '')
+        .join('')
+        .trim();
+
+    if (!responseText) {
+      console.error('Gemini returned an empty response:', data);
+
+      return res.status(502).json({
+        success: false,
+        message: 'No AI response generated.',
+      });
+    }
 
     return res.status(200).json({
       success: true,
       reply: responseText,
     });
+
   } catch (error: any) {
-    console.error('Server Endpoint Error:', error);
+    console.error('Gemini Server Error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch AI response.',
-      error: error.message || error,
     });
   }
 });
