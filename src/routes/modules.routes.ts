@@ -1,16 +1,7 @@
 import { Router, Request, Response } from 'express';
-import { Pool } from 'pg';
+import pool from '../config/db.js';
 
 const router = Router();
-
-// DB Connection (Aapke existing PostgreSQL config ke mutabiq detail check kar lein)
-const pool = new Pool({
-  user: process.env.DB_USER || 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'HerFunds',
-  password: process.env.DB_PASSWORD || 'your_password',
-  port: Number(process.env.DB_PORT) || 5432,
-});
 
 // GET QUIZ QUESTIONS FOR A MODULE
 router.get('/modules/:id/quiz', async (req: Request, res: Response) => {
